@@ -1,0 +1,36 @@
+[project]
+name = "microdex"
+version = "0.2.0"
+description = "Codex-style submission, task, and LangGraph agent loops"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "aiosqlite>=0.20",
+    "langgraph>=1.0",
+    "langgraph-checkpoint-sqlite>=2",
+    "openai>=1.70",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+microdex = "microdex.cli:main"
+microdex-debug = "microdex.debug_walkthrough:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["microdex*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "scaffold: wiring that is already implemented",
+    "core: turn policy and tool behavior to implement",
+]
