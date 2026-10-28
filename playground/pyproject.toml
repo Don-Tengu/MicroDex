@@ -1,5 +1,0 @@
-[project]
-name = "playground"
-version = "0.0.0"
-description = "Tiny workspace for trying Microdex without editing the runtime."
-requires-python = ">=3.11"
