@@ -1,7 +1,13 @@
 import asyncio
 
 import pytest
-from microdex.cli import interactive_session, main, parse_args, run_session
+from microdex.cli import (
+    _default_checkpoint_path,
+    interactive_session,
+    main,
+    parse_args,
+    run_session,
+)
 from microdex.constants import EXEC_OUTPUT_CAP_BYTES, EXEC_TIMEOUT_SECONDS
 
 pytestmark = pytest.mark.scaffold
@@ -13,11 +19,14 @@ def test_help_exits_cleanly():
     assert caught.value.code == 0
 
 
-def test_defaults_point_at_a_local_checkpoint(tmp_path, monkeypatch):
+def test_exec_defaults_to_a_local_checkpoint_outside_git_repository(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    args = parse_args(["fix this test"])
+    args = parse_args(["exec", "fix this test"])
     assert args.prompt == "fix this test"
-    assert args.checkpoint.as_posix() == ".microdex/checkpoints.sqlite"
+    assert args.checkpoint is None
+    assert _default_checkpoint_path(args.cwd) == (
+        tmp_path / ".microdex" / "checkpoints.sqlite"
+    )
     assert args.thread == ""
     assert args.model is None
     assert args.provider == "xai"
@@ -31,7 +40,7 @@ def test_provider_can_be_selected_explicitly():
 
 def test_missing_cwd_is_a_usage_error(tmp_path):
     missing = tmp_path / "nope"
-    assert main(["fix this test", "--cwd", str(missing)]) == 2
+    assert main(["exec", "fix this test", "--cwd", str(missing)]) == 2
 
 
 def test_no_prompt_opens_a_session(tmp_path, monkeypatch):
