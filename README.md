@@ -76,13 +76,24 @@ Pass --workspace with an empty directory to keep the generated files.
 
 ## Run
 
-Microdex supports macOS and Linux with Python 3.11 or newer.
+Microdex supports macOS and Linux with Python 3.11 or newer. The full-screen
+TypeScript TUI also requires Node.js 22.6 or newer.
 
-Create an environment and install the package:
+Install the latest source from GitHub directly with pip:
 
+    python3 -m pip install "git+https://github.com/Don-Tengu/MicroDex.git"
+
+Or clone the repository if you want to inspect or modify the source:
+
+    git clone https://github.com/Don-Tengu/MicroDex.git
+    cd MicroDex
     python3 -m venv .venv
     source .venv/bin/activate
-    pip install -e .
+    python -m pip install -e .
+
+For development, install the test and build tools too:
+
+    python -m pip install -e ".[dev]"
 
 The CLI supports xAI and OpenAI Chat Completions. xAI remains the default.
 Set `XAI_API_KEY` or use the optional SuperGrok login flow:
@@ -102,14 +113,35 @@ endpoint. `microdex login` only configures the xAI provider.
 `--model` overrides the provider-specific model environment variable. OpenAI
 requires `--model` or `OPENAI_MODEL`; xAI keeps the existing default model.
 
-With no positional prompt, the process stays open on one conversation. A
-single task can be sent in one-shot mode:
+Running `microdex` in a terminal opens the TUI launcher. Type a task and press
+Enter to start a new session in the current directory, or choose Resume Session,
+Changelog, or Quit with the arrow keys. You can also hover over and click a menu
+item. Resume Session shows a full-width, one-line list of saved sessions whose
+checkpointed working directory matches the current directory; use the keyboard
+or hover/click a row to restore its transcript and continue that conversation.
+Changelog shows the latest commits in the current Git repository. New Worktree
+is temporarily hidden from the TUI.
 
-    microdex "fix this test" --cwd .
+In the TUI, Enter sends a message and also steers a running task. Ctrl+C
+interrupts the active task. When a tool approval is requested, inspect the
+command or patch and press `y` to approve or `n`/Esc to deny. Ctrl+Q quits.
+Use PageUp/PageDown or the mouse wheel to scroll chat history. Fast touchpad
+gestures are normalized and wheel redraws are coalesced to avoid a queued
+scroll tail; when history overflows, use the proportional bar on the right to
+jump or drag through the conversation.
+Use `--plain` for the line-oriented interactive CLI. Use the `exec` subcommand
+for a single headless task:
+
+    microdex exec "fix this test" --cwd .
 
 Reuse checkpointed history by supplying the same id:
 
     microdex --thread my-thread --cwd .
+
+Git repositories and linked worktrees share a default checkpoint database at
+the Git common directory's `.microdex/checkpoints.sqlite`. Use `--checkpoint`
+to select a different database. Non-TTY runs and invocations with `--thread`
+continue to use the line-oriented CLI.
 
 ## Tool approvals
 
@@ -160,6 +192,14 @@ The matching source archive is also attached to each release.
       tools/                 read, rg, apply_patch, exec_command
       persistence/
         checkpointer.py      SQLite graph checkpoint contexts
+        session_index.py     resumable session listing and transcript loading
+      tui/
+        main.ts              TypeScript terminal UI entry point
+        app.ts               screen state and event coordination
+        render.ts            launcher, picker, transcript, and approval views
+        terminal.ts          raw terminal input and lifecycle
+        bridge.ts            JSON-lines runtime client
+      tui_bridge.py          Python adapter to MicrodexThread and SessionIo
 
 ## Later slices
 

@@ -86,6 +86,10 @@ directly.
 11. `apply_patch` and `exec_command` wait for a matching ToolApprovalDecision
     through SessionIo before dispatch. Approval waiters stay in runtime state;
     interrupt and shutdown reject pending requests.
+12. The TypeScript TUI is a client. It sends JSON-lines operations through
+    `tui_bridge.py`; user input, interrupts, and approval decisions must still
+    enter through MicrodexThread and SessionIo. The TUI may read checkpoint
+    snapshots to build its resume picker and transcript.
 
 ## Code map
 
@@ -106,6 +110,13 @@ directly.
 - src/microdex/tools/: schemas, dispatch, path checks, and tool bodies.
 - src/microdex/persistence/checkpointer.py: synchronous and asynchronous SQLite
   checkpoint contexts.
+- src/microdex/persistence/session_index.py: resumable sessions and history
+  loaded from LangGraph checkpoints.
+- src/microdex/tui_bridge.py: JSON-lines adapter from the TypeScript UI to the
+  existing session runtime.
+- src/microdex/tui/: TypeScript screens, terminal input/rendering, and the
+  runtime bridge client. `app.ts` coordinates the home screen, resume picker,
+  transcript, composer, and approval overlay.
 
 ## Reference source map
 

@@ -1,9 +1,12 @@
-"""Line-oriented client for the Microdex session runtime."""
+"""Command-line application for the Microdex session runtime."""
 
 import argparse
 import asyncio
 import contextlib
 import os
+import re
+import shutil
+import subprocess
 import sys
 import uuid
 from collections.abc import Callable
@@ -21,37 +24,56 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Codex-style coding-agent session with a submission loop."
     )
-    parser.add_argument(
-        "prompt",
-        nargs="?",
-        default=None,
-        help="Run one task and exit. Omit to open an interactive session.",
+    _add_runtime_arguments(parser)
+    parser.set_defaults(command=None, prompt=None)
+
+    commands = parser.add_subparsers(dest="command")
+    exec_parser = commands.add_parser(
+        "exec",
+        help="Run one headless task and exit",
+        description="Submit one prompt to Microdex, print the response, and exit.",
     )
+    _add_runtime_arguments(exec_parser, suppress_defaults=True)
+    exec_parser.add_argument("prompt", help="Task prompt")
+    return parser.parse_args(argv)
+
+
+def _add_runtime_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    suppress_defaults: bool = False,
+) -> None:
+    default = argparse.SUPPRESS if suppress_defaults else None
     parser.add_argument(
         "--cwd",
         type=Path,
-        default=Path.cwd(),
+        default=argparse.SUPPRESS if suppress_defaults else Path.cwd(),
         help="Working directory given to the tools",
     )
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=Path(".microdex/checkpoints.sqlite"),
-        help="SQLite file for LangGraph checkpoints",
+        default=default,
+        help="SQLite checkpoint file (defaults to the Git repository's .microdex directory)",
     )
     parser.add_argument(
         "--thread",
-        default="",
+        default=argparse.SUPPRESS if suppress_defaults else "",
         help="Conversation id. Reuse it to continue checkpointed history.",
     )
-    parser.add_argument("--model", default=None, help="Model name")
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        default=argparse.SUPPRESS if suppress_defaults else False,
+        help="Use the basic line-oriented CLI instead of the TypeScript TUI",
+    )
+    parser.add_argument("--model", default=default, help="Model name")
     parser.add_argument(
         "--provider",
         choices=("xai", "openai"),
-        default="xai",
+        default=argparse.SUPPRESS if suppress_defaults else "xai",
         help="Model provider (default: xai)",
     )
-    return parser.parse_args(argv)
 
 
 def print_event(event: EventMsg) -> None:
@@ -106,11 +128,98 @@ def main(argv: list[str] | None = None) -> int:
     if not cwd.is_dir():
         print(f"Working directory not found: {cwd}", file=sys.stderr)
         return 2
+    if args.checkpoint is None:
+        args.checkpoint = _default_checkpoint_path(cwd)
+    if (
+        args.prompt is None
+        and not args.plain
+        and not args.thread
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    ):
+        return _launch_tui(args, cwd)
     try:
         return asyncio.run(_run(args, cwd))
     except KeyboardInterrupt:
         print("\n[interrupted]", file=sys.stderr)
         return 130
+
+
+def _launch_tui(args: argparse.Namespace, cwd: Path) -> int:
+    """Start the TypeScript terminal UI; Python remains the runtime owner."""
+
+    node = shutil.which("node")
+    if node is None:
+        print(
+            "The Microdex TUI requires Node.js 22.6 or newer. "
+            "Install Node.js or run with --plain.",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        result = subprocess.run(
+            [node, "--version"], capture_output=True, text=True, check=True
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"Could not check the Node.js version: {exc}", file=sys.stderr)
+        return 2
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.\d+.*", result.stdout.strip())
+    if not match or (int(match.group(1)), int(match.group(2))) < (22, 6):
+        print(
+            f"The Microdex TUI needs Node.js 22.6 or newer; "
+            f"found {result.stdout.strip() or 'unknown'}. "
+            "Run with --plain to use the line-oriented CLI.",
+            file=sys.stderr,
+        )
+        return 2
+
+    entry = Path(__file__).parent / "tui" / "main.ts"
+    if not entry.is_file():
+        print(
+            f"Microdex TUI source is missing from this installation: {entry}",
+            file=sys.stderr,
+        )
+        return 2
+    command = [
+        node,
+        "--experimental-strip-types",
+        "--disable-warning=ExperimentalWarning",
+        str(entry),
+        "--cwd",
+        str(cwd),
+        "--checkpoint",
+        str(args.checkpoint.expanduser().resolve()),
+        "--provider",
+        args.provider,
+    ]
+    if args.model:
+        command.extend(["--model", args.model])
+    environment = os.environ.copy()
+    environment["MICRODEX_BRIDGE_PYTHON"] = sys.executable
+    try:
+        return subprocess.call(command, cwd=Path.cwd(), env=environment)
+    except OSError as exc:
+        print(f"Could not start the Microdex TUI: {exc}", file=sys.stderr)
+        return 2
+
+
+def _default_checkpoint_path(cwd: Path) -> Path:
+    """Use one checkpoint database for a repository and its linked worktrees."""
+
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return cwd / ".microdex" / "checkpoints.sqlite"
+    common_dir = Path(result.stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = (cwd / common_dir).resolve()
+    return common_dir.parent / ".microdex" / "checkpoints.sqlite"
 
 
 async def _run(args: argparse.Namespace, cwd: Path) -> int:

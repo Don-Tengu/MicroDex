@@ -29,6 +29,9 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 include = ["microdex*"]
 
+[tool.setuptools.package-data]
+microdex = ["tui/*.ts", "tui/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
