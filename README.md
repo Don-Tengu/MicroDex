@@ -34,6 +34,10 @@ Multiple conversations work concurrently as asyncio tasks. The read_file and
 rg calls from the same model response can run in parallel; state-changing
 tools form ordering barriers.
 
+The CLI can receive more input while a task runs. New text is steered into the
+active task before its next model request. Use `/interrupt` or Ctrl+C to cancel
+the task. `/exit` closes the session.
+
 ## What happens to a prompt
 
 1. The client submits TurnInput to SessionIo.
@@ -65,11 +69,14 @@ The same entry point is also installed as:
 The walkthrough creates a temporary workspace and uses a gated scripted model.
 It demonstrates ThreadManager creation, Submission routing, submission_loop,
 RegularTask, steering through InputQueue, a parallel read/search batch,
-apply_patch, exec_command, model follow-up, turn completion, and the final
-checkpoint history. The temporary workspace is printed and removed at the end.
+automatic approval by the scripted walkthrough for apply_patch and
+exec_command, model follow-up, turn completion, and the final checkpoint
+history. The temporary workspace is printed and removed at the end.
 Pass --workspace with an empty directory to keep the generated files.
 
 ## Run
+
+Microdex supports macOS and Linux with Python 3.11 or newer.
 
 Create an environment and install the package:
 
@@ -77,13 +84,26 @@ Create an environment and install the package:
     source .venv/bin/activate
     pip install -e .
 
-Authenticate with xAI or provide XAI_API_KEY:
+The CLI supports xAI and OpenAI Chat Completions. xAI remains the default.
+Set `XAI_API_KEY` or use the optional SuperGrok login flow:
 
     microdex login
-    microdex --cwd .
+    microdex --provider xai --cwd .
+
+For OpenAI, set its API key and model:
+
+    export OPENAI_API_KEY=...
+    export OPENAI_MODEL=...
+    microdex --provider openai --cwd .
+
+`OPENAI_BASE_URL` is optional; if omitted, the OpenAI SDK uses its default
+endpoint. `microdex login` only configures the xAI provider.
+
+`--model` overrides the provider-specific model environment variable. OpenAI
+requires `--model` or `OPENAI_MODEL`; xAI keeps the existing default model.
 
 With no positional prompt, the process stays open on one conversation. A
-single task can be run non-interactively:
+single task can be sent in one-shot mode:
 
     microdex "fix this test" --cwd .
 
@@ -91,9 +111,31 @@ Reuse checkpointed history by supplying the same id:
 
     microdex --thread my-thread --cwd .
 
+## Tool approvals
+
+`read_file` and `rg` run without approval. Before `apply_patch` changes files or
+`exec_command` runs a shell command, Microdex displays the working directory
+and exact patch or command, then waits for approval. In an interactive session,
+type `/approve` or `/deny`; for a one-shot task, answer `y` or `n`. Without an
+interactive terminal, mutating tools are denied and returned to the model as
+tool errors.
+
+Approval is a user confirmation, not an OS sandbox. An approved shell command
+runs with the current user's permissions and can access files outside the
+working directory.
+
 The caller supplies the conversation id. ThreadManager tracks live
 conversations in the process; SQLite restores LangGraph state for a reused id.
 SQLite is not consulted to route every incoming prompt.
+
+## Installing a GitHub Release
+
+Download the `.whl` asset for the version you want, then install it in an
+activated virtual environment:
+
+    python -m pip install ./microdex-VERSION-py3-none-any.whl
+
+The matching source archive is also attached to each release.
 
 ## Source layout
 
@@ -101,6 +143,7 @@ SQLite is not consulted to route every incoming prompt.
       runtime/
         protocol.py          operations in and events out
         session_io.py        submission and event queues
+        approval.py          runtime-owned approval waiters
         input_queue.py       steering during an active task
         session.py           one live session
         submission_loop.py   session event loop
@@ -118,8 +161,8 @@ SQLite is not consulted to route every incoming prompt.
       persistence/
         checkpointer.py      SQLite graph checkpoint contexts
 
-## Deliberate next slices
+## Later slices
 
-Approval, stronger sandboxing, context compaction, stop hooks, PTY sessions,
-subagents, long-term memory, MCP, and computer use are extension points rather
-than fake stubs. Their intended boundaries are documented in AGENTS.md.
+Stronger sandboxing, context compaction, stop hooks, PTY sessions, subagents,
+long-term memory, MCP, and computer use remain future extension points. Their
+intended boundaries are documented in AGENTS.md.

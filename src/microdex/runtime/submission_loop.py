@@ -12,6 +12,7 @@ from microdex.runtime.protocol import (
     Interrupt,
     Shutdown,
     Submission,
+    ToolApprovalDecision,
     TurnInput,
     event_msg,
 )
@@ -48,6 +49,7 @@ async def submission_loop(session: Session) -> None:
         receive.cancel()
         with suppress(asyncio.CancelledError):
             await receive
+        session.approval_broker.reject_pending(close=True)
         if session.active_task is not None:
             session.active_task.cancel()
             await _reap_active_task(session, restart_pending=False)
@@ -60,6 +62,19 @@ async def _handle_submission(session: Session, submission: Submission) -> bool:
     if isinstance(op, Shutdown):
         return True
 
+    if isinstance(op, ToolApprovalDecision):
+        if not session.approval_broker.resolve(op.tool_call_id, op.approved):
+            await session.emit(
+                event_msg(
+                    "error",
+                    thread_id=session.id,
+                    submission_id=submission.id,
+                    text=f"no pending approval for tool call {op.tool_call_id}",
+                    ok=False,
+                )
+            )
+        return False
+
     if isinstance(op, Interrupt):
         if session.active_task is None:
             await session.emit(
@@ -71,6 +86,7 @@ async def _handle_submission(session: Session, submission: Submission) -> bool:
                 )
             )
         else:
+            session.approval_broker.reject_pending()
             session.input_queue.drain()
             session.active_task.cancel()
             await _reap_active_task(session, restart_pending=False)

@@ -6,7 +6,7 @@ observe events; they never call the turn graph directly.
 """
 
 from dataclasses import dataclass
-from typing import Literal, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +24,13 @@ class Shutdown:
     pass
 
 
-Op = TurnInput | Interrupt | Shutdown
+@dataclass(frozen=True, slots=True)
+class ToolApprovalDecision:
+    tool_call_id: str
+    approved: bool
+
+
+Op = TurnInput | Interrupt | Shutdown | ToolApprovalDecision
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +45,7 @@ EventKind = Literal[
     "agent_message_content_delta",
     "tool_start",
     "tool_end",
+    "tool_approval_requested",
     "turn_completed",
     "turn_aborted",
     "error",
@@ -57,6 +64,8 @@ class EventMsg(TypedDict):
     tool_call_id: str
     ok: bool
     reason: NotRequired[str]
+    tool_arguments: NotRequired[dict[str, Any]]
+    cwd: NotRequired[str]
 
 
 def event_msg(
@@ -70,6 +79,8 @@ def event_msg(
     tool_call_id: str = "",
     ok: bool = True,
     reason: str = "",
+    tool_arguments: dict[str, Any] | None = None,
+    cwd: str = "",
 ) -> EventMsg:
     event: EventMsg = {
         "kind": kind,
@@ -83,4 +94,8 @@ def event_msg(
     }
     if reason:
         event["reason"] = reason
+    if tool_arguments is not None:
+        event["tool_arguments"] = tool_arguments
+    if cwd:
+        event["cwd"] = cwd
     return event

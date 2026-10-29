@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import contextlib
 import os
 import sys
 import uuid
@@ -44,6 +45,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Conversation id. Reuse it to continue checkpointed history.",
     )
     parser.add_argument("--model", default=None, help="Model name")
+    parser.add_argument(
+        "--provider",
+        choices=("xai", "openai"),
+        default="xai",
+        help="Model provider (default: xai)",
+    )
     return parser.parse_args(argv)
 
 
@@ -56,6 +63,23 @@ def print_event(event: EventMsg) -> None:
     elif kind == "tool_end":
         status = "ok" if event["ok"] else "error"
         print(f"[tool] {event['tool_name']} {status}", file=sys.stderr)
+    elif kind == "tool_approval_requested":
+        print(
+            f"\n[approval required] {event['tool_name']} "
+            f"call_id={event['tool_call_id']}",
+            file=sys.stderr,
+        )
+        if event.get("cwd"):
+            print(f"  cwd: {event['cwd']}", file=sys.stderr)
+        arguments = event.get("tool_arguments", {})
+        if event["tool_name"] == "exec_command":
+            print(f"  command: {arguments.get('cmd', '')}", file=sys.stderr)
+            if arguments.get("workdir"):
+                print(f"  workdir: {arguments['workdir']}", file=sys.stderr)
+        elif event["tool_name"] == "apply_patch":
+            print(arguments.get("patch", ""), file=sys.stderr)
+        else:
+            print(arguments, file=sys.stderr)
     elif kind == "input_queued":
         print("[input queued for the active turn]", file=sys.stderr)
     elif kind == "error":
@@ -91,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
 
 async def _run(args: argparse.Namespace, cwd: Path) -> int:
     thread_id = args.thread or uuid.uuid4().hex
-    model_client = ModelClient(model=args.model)
+    model_client = ModelClient(model=args.model, provider=args.provider)
     async with open_async_checkpointer(args.checkpoint) as saver:
         manager = ThreadManager(model_client, checkpointer=saver)
         thread = await manager.create_thread(cwd, thread_id=thread_id)
@@ -111,6 +135,8 @@ async def submit_and_render(thread: MicrodexThread, text: str) -> bool:
     while True:
         event = await thread.next_event()
         print_event(event)
+        if event["kind"] == "tool_approval_requested":
+            await _answer_one_shot_approval(thread, event)
         printed_text = printed_text or (event["kind"] == "agent_message_content_delta")
         if (
             event["kind"] in {"turn_completed", "turn_aborted"}
@@ -121,24 +147,138 @@ async def submit_and_render(thread: MicrodexThread, text: str) -> bool:
             return event["kind"] == "turn_completed"
 
 
-async def interactive_session(thread: MicrodexThread) -> int:
+async def _answer_one_shot_approval(thread: MicrodexThread, event: EventMsg) -> None:
+    if not sys.stdin.isatty():
+        print(
+            "[tool approval denied: an interactive terminal is required]",
+            file=sys.stderr,
+        )
+        await thread.approve_tool(event["tool_call_id"], False)
+        return
+    answer = await asyncio.to_thread(input, "Approve this tool call? [y/N] ")
+    approved = answer.strip().lower() in {"y", "yes"}
+    await thread.approve_tool(event["tool_call_id"], approved)
+    if not approved:
+        print("[tool call denied]", file=sys.stderr)
+
+
+async def interactive_session(
+    thread: MicrodexThread,
+    read_line: Callable[[str], str] | None = None,
+) -> int:
     print(f"thread {thread.id}", file=sys.stderr)
-    print("empty line is ignored, /exit quits", file=sys.stderr)
+    print(
+        "Enter sends input; /approve and /deny answer tool requests; "
+        "/interrupt cancels the active task; /exit quits.",
+        file=sys.stderr,
+    )
+    pending_approvals: dict[str, EventMsg] = {}
+    event_task = asyncio.create_task(
+        _render_interactive_events(thread, pending_approvals),
+        name=f"microdex-cli-events-{thread.id}",
+    )
+    reader = read_line or input
+    try:
+        while True:
+            try:
+                if read_line is None:
+                    line = await _read_interactive_line("› ")
+                else:
+                    line = await asyncio.to_thread(reader, "› ")
+            except EOFError:
+                print(file=sys.stderr)
+                return 0
+            except KeyboardInterrupt:
+                await thread.interrupt()
+                continue
+            except asyncio.CancelledError:
+                task = asyncio.current_task()
+                if task is None or task.cancelling() == 0:
+                    raise
+                task.uncancel()
+                await thread.interrupt()
+                continue
+            text = line.strip()
+            if not text:
+                continue
+            if text in {"/exit", "/quit"}:
+                return 0
+            if text in {"/interrupt", "/cancel"}:
+                await thread.interrupt()
+                continue
+            if pending_approvals and text.lower() in {"/approve", "yes", "y"}:
+                call_id = next(iter(pending_approvals))
+                pending_approvals.pop(call_id)
+                await thread.approve_tool(call_id, True)
+                continue
+            if pending_approvals and text.lower() in {"/deny", "no", "n"}:
+                call_id = next(iter(pending_approvals))
+                pending_approvals.pop(call_id)
+                await thread.approve_tool(call_id, False)
+                continue
+            await thread.start_turn(text)
+    finally:
+        event_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await event_task
+
+
+async def _read_interactive_line(prompt: str) -> str:
+    """Read terminal input without leaving a worker blocked after Ctrl+C."""
+
+    if not sys.stdin.isatty():
+        return await asyncio.to_thread(input, prompt)
+
+    print(prompt, end="", flush=True)
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[str] = loop.create_future()
+    file_descriptor = sys.stdin.fileno()
+
+    def read_ready() -> None:
+        if future.done():
+            return
+        try:
+            future.set_result(sys.stdin.readline())
+        except Exception as exc:
+            future.set_exception(exc)
+
+    loop.add_reader(file_descriptor, read_ready)
+    try:
+        line = await future
+    finally:
+        loop.remove_reader(file_descriptor)
+    if line == "":
+        raise EOFError
+    return line.rstrip("\r\n")
+
+
+async def _render_interactive_events(
+    thread: MicrodexThread,
+    pending_approvals: dict[str, EventMsg],
+) -> None:
     while True:
-        try:
-            line = await asyncio.to_thread(input, "› ")
-        except EOFError:
-            print(file=sys.stderr)
-            return 0
-        text = line.strip()
-        if not text:
-            continue
-        if text in {"/exit", "/quit"}:
-            return 0
-        try:
-            await submit_and_render(thread, text)
-        except KeyboardInterrupt:
-            await thread.interrupt()
+        event = await thread.next_event()
+        if event["kind"] == "tool_approval_requested":
+            call_id = event["tool_call_id"]
+            if not sys.stdin.isatty():
+                print(
+                    "[tool approval denied: an interactive terminal is required]",
+                    file=sys.stderr,
+                )
+                await thread.approve_tool(call_id, False)
+            else:
+                pending_approvals[call_id] = event
+        elif event["kind"] in {"tool_start", "tool_end"}:
+            pending_approvals.pop(event["tool_call_id"], None)
+        elif event["kind"] in {"turn_completed", "turn_aborted"}:
+            for call_id, request in list(pending_approvals.items()):
+                if request["turn_id"] == event["turn_id"]:
+                    pending_approvals.pop(call_id, None)
+        print_event(event)
+        if event["kind"] == "tool_approval_requested" and sys.stdin.isatty():
+            print("Type /approve or /deny at the prompt.", file=sys.stderr)
+        if event["kind"] == "session_closed":
+            return
 
 
 def run_session(

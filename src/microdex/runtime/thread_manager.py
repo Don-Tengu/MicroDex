@@ -9,6 +9,7 @@ from microdex.client import ModelClient, ScriptedModelClient
 from microdex.constants import RECURSION_LIMIT
 from microdex.context.agents_md import load_project_instructions
 from microdex.runtime.input_queue import InputQueue
+from microdex.runtime.approval import ApprovalBroker
 from microdex.runtime.session import Session
 from microdex.runtime.session_io import SessionIo
 from microdex.runtime.submission_loop import submission_loop
@@ -49,10 +50,12 @@ class ThreadManager:
 
             io = SessionIo()
             input_queue = InputQueue()
+            approval_broker = ApprovalBroker(identity, io, str(resolved))
             graph = build_turn_graph(
                 self._model_client,
                 checkpointer=self._checkpointer,
                 drain_pending_inputs=input_queue.drain,
+                request_approval=approval_broker.request,
             )
             session = Session(
                 id=identity,
@@ -61,6 +64,7 @@ class ThreadManager:
                 graph=graph,
                 io=io,
                 input_queue=input_queue,
+                approval_broker=approval_broker,
                 recursion_limit=self._recursion_limit,
             )
             loop_task = asyncio.create_task(

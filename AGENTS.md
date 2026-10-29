@@ -51,6 +51,7 @@ directly.
   is not an operating-system thread.
 - One MicrodexThread owns one Session and one SessionIo.
 - One Session owns one submission_loop and has at most one active RegularTask.
+- One Session owns one ApprovalBroker for pending mutating-tool decisions.
 - A Session may run many RegularTask instances over its lifetime, one after
   another.
 - Multiple sessions are concurrent asyncio tasks on one event loop. Safe
@@ -82,11 +83,15 @@ directly.
     AGENTS.override.md or AGENTS.md from project root down to cwd, preferring
     the override file at each level, and include the merged text in every model
     request.
+11. `apply_patch` and `exec_command` wait for a matching ToolApprovalDecision
+    through SessionIo before dispatch. Approval waiters stay in runtime state;
+    interrupt and shutdown reject pending requests.
 
 ## Code map
 
 - src/microdex/runtime/protocol.py: Op, Submission, and EventMsg boundary.
 - src/microdex/runtime/session_io.py: submission and event queues.
+- src/microdex/runtime/approval.py: runtime-owned approval waiters.
 - src/microdex/runtime/input_queue.py: active-turn steering input.
 - src/microdex/runtime/session.py: runtime-owned state and active-task slot.
 - src/microdex/runtime/submission_loop.py: long-lived session event loop.
@@ -143,11 +148,13 @@ Codex name for a different responsibility.
 
 The working core includes the submission queue, multi-session runtime,
 steering, cancellation, event stream, project instructions, SQLite
-checkpoints, and read/search/patch/shell tools.
+checkpoints, xAI and OpenAI providers, per-call approval for mutating tools,
+and read/search/patch/shell tools.
 
 The following are later slices and must attach at the existing boundaries:
 
-- approval and sandbox policy: before tool execution;
+- stronger OS sandbox policy: around tool execution (mutating tools now require
+  client approval before dispatch);
 - context compaction: before model sampling;
 - stop hooks: after a candidate final answer, before graph END;
 - background PTY: behind the tool runtime;

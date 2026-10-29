@@ -99,22 +99,38 @@ class ModelClient:
         model: str | None = None,
         api_key: str | None = None,
         base_url: str | None = None,
+        *,
+        provider: str = "xai",
     ) -> None:
-        self.model = model or os.environ.get("XAI_MODEL") or "grok-4.7"
-        # None means "resolve at call time": env key, then the SuperGrok login.
+        if provider not in {"xai", "openai"}:
+            raise ValueError("provider must be 'xai' or 'openai'")
+        self.provider = provider
+        if provider == "xai":
+            self.model = model or os.environ.get("XAI_MODEL") or "grok-4.7"
+            self.base_url = (
+                base_url or os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1"
+            )
+        else:
+            self.model = model or os.environ.get("OPENAI_MODEL") or ""
+            self.base_url = base_url or os.environ.get("OPENAI_BASE_URL") or ""
+        # None means "resolve at call time" from the provider's environment.
         self.api_key = api_key
-        self.base_url = (
-            base_url or os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1"
-        )
 
     def complete(self, prompt: Prompt, emit: Emit) -> ModelOutcome:
+        if not self.model:
+            raise RuntimeError(
+                "OpenAI requires --model or OPENAI_MODEL to be set."
+            )
         try:
-            api_key = resolve_api_key(self.api_key)
+            api_key = self._resolve_api_key()
         except RuntimeError as exc:
             raise RuntimeError(
                 f"{exc} Core tests use ScriptedModelClient and do not need a credential."
             ) from exc
-        client = OpenAI(api_key=api_key, base_url=self.base_url, timeout=180.0)
+        options = {"api_key": api_key, "timeout": 180.0}
+        if self.base_url:
+            options["base_url"] = self.base_url
+        client = OpenAI(**options)
         stream = client.chat.completions.create(
             model=self.model,
             messages=prompt.messages,
@@ -129,3 +145,13 @@ class ModelClient:
             if new_text:
                 emit(agent_message_content_delta(new_text))
         return finish_outcome(parts, tools)
+
+    def _resolve_api_key(self) -> str:
+        if self.provider == "xai":
+            return resolve_api_key(self.api_key)
+        if self.api_key:
+            return self.api_key
+        api_key = os.environ.get("OPENAI_API_KEY") or ""
+        if not api_key:
+            raise RuntimeError("No OpenAI API key. Set OPENAI_API_KEY.")
+        return api_key

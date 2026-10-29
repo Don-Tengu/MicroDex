@@ -1,5 +1,7 @@
+import asyncio
+
 import pytest
-from microdex.cli import main, parse_args, run_session
+from microdex.cli import interactive_session, main, parse_args, run_session
 from microdex.constants import EXEC_OUTPUT_CAP_BYTES, EXEC_TIMEOUT_SECONDS
 
 pytestmark = pytest.mark.scaffold
@@ -18,6 +20,13 @@ def test_defaults_point_at_a_local_checkpoint(tmp_path, monkeypatch):
     assert args.checkpoint.as_posix() == ".microdex/checkpoints.sqlite"
     assert args.thread == ""
     assert args.model is None
+    assert args.provider == "xai"
+
+
+def test_provider_can_be_selected_explicitly():
+    args = parse_args(["--provider", "openai", "--model", "gpt-test"])
+    assert args.provider == "openai"
+    assert args.model == "gpt-test"
 
 
 def test_missing_cwd_is_a_usage_error(tmp_path):
@@ -56,6 +65,88 @@ def test_session_stays_open_when_a_turn_fails():
 
     assert run_session(on_turn, "thread-a", read_line) == 0
     assert seen == ["first", "second"]
+
+
+def test_interactive_cli_submits_steering_before_current_turn_finishes():
+    class FakeThread:
+        id = "thread-a"
+
+        def __init__(self):
+            self.started = []
+            self.interrupts = 0
+
+        async def start_turn(self, text):
+            self.started.append(text)
+            return f"submission-{len(self.started)}"
+
+        async def interrupt(self):
+            self.interrupts += 1
+            return "interrupt"
+
+        async def next_event(self):
+            await asyncio.Future()
+
+    lines = iter(["first", "steering", "/interrupt", "/exit"])
+    thread = FakeThread()
+
+    def read_line(_prompt):
+        return next(lines)
+
+    assert asyncio.run(interactive_session(thread, read_line=read_line)) == 0
+    assert thread.started == ["first", "steering"]
+    assert thread.interrupts == 1
+
+
+def test_interactive_cli_routes_approval_through_its_single_input_loop(monkeypatch):
+    class FakeThread:
+        id = "thread-a"
+
+        def __init__(self):
+            self.events = asyncio.Queue()
+            self.approvals = []
+
+        async def start_turn(self, text):
+            if text == "first":
+                await self.events.put(
+                    {
+                        "kind": "tool_approval_requested",
+                        "thread_id": self.id,
+                        "turn_id": "turn-a",
+                        "submission_id": "",
+                        "text": "",
+                        "tool_name": "exec_command",
+                        "tool_call_id": "exec-1",
+                        "tool_arguments": {"cmd": "printf ok"},
+                        "cwd": "/tmp/project",
+                        "ok": False,
+                    }
+                )
+                await asyncio.sleep(0)
+            return "submission"
+
+        async def approve_tool(self, tool_call_id, approved):
+            self.approvals.append((tool_call_id, approved))
+            return "approval-submission"
+
+        async def interrupt(self):
+            return "interrupt"
+
+        async def next_event(self):
+            return await self.events.get()
+
+    class Tty:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr("sys.stdin", Tty())
+    lines = iter(["first", "/approve", "/exit"])
+    thread = FakeThread()
+
+    def read_line(_prompt):
+        return next(lines)
+
+    assert asyncio.run(interactive_session(thread, read_line=read_line)) == 0
+    assert thread.approvals == [("exec-1", True)]
 
 
 def test_phase1_limits_are_positive_constants():

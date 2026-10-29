@@ -25,14 +25,14 @@ def test_scripted_read_and_exec_then_stop(tmp_path):
                     ToolCall(
                         id="exec-1",
                         name="exec_command",
-                        arguments={"cmd": "python3 hello.py"},
+                            arguments={"cmd": "printf '1\\n'"},
                     )
                 ]
             ),
             ModelOutcome(text="fixed"),
         ]
     )
-    graph = build_turn_graph(client)
+    graph = build_turn_graph(client, request_approval=lambda call, turn_id: True)
     final = graph.invoke(
         initial_state("fix this test", str(tmp_path)),
         config={"recursion_limit": 12},

@@ -2,7 +2,13 @@
 
 import asyncio
 
-from microdex.runtime.protocol import EventMsg, Interrupt, Shutdown, TurnInput
+from microdex.runtime.protocol import (
+    EventMsg,
+    Interrupt,
+    Shutdown,
+    ToolApprovalDecision,
+    TurnInput,
+)
 from microdex.runtime.session import Session
 from microdex.runtime.session_io import SessionIo
 
@@ -29,6 +35,11 @@ class MicrodexThread:
 
     async def interrupt(self, reason: str = "user") -> str:
         return await self.io.submit(Interrupt(reason=reason))
+
+    async def approve_tool(self, tool_call_id: str, approved: bool) -> str:
+        return await self.io.submit(
+            ToolApprovalDecision(tool_call_id=tool_call_id, approved=approved)
+        )
 
     async def next_event(self) -> EventMsg:
         return await self.io.next_event()

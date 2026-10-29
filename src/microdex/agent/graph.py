@@ -21,7 +21,7 @@ from langgraph.graph.state import CompiledStateGraph
 from microdex.agent.nodes.model import sample_node
 from microdex.agent.nodes.tools import tools_node
 from microdex.agent.routing import route_after_input, route_after_sample
-from microdex.agent.state import TurnState, user_message
+from microdex.agent.state import ToolCallState, TurnState, user_message
 from microdex.client import ModelClient, ScriptedModelClient
 from microdex.events import emit
 
@@ -31,6 +31,7 @@ def build_turn_graph(
     checkpointer=None,
     *,
     drain_pending_inputs: Callable[[], list[str]] | None = None,
+    request_approval: Callable[[ToolCallState, str], bool] | None = None,
 ) -> CompiledStateGraph:
     drain_pending_inputs = drain_pending_inputs or (list)
 
@@ -38,7 +39,7 @@ def build_turn_graph(
         return sample_node(state, model_client, emit)
 
     def tools(state: TurnState) -> dict:
-        return tools_node(state, emit)
+        return tools_node(state, emit, request_approval)
 
     def drain_input(state: TurnState) -> dict:
         pending = drain_pending_inputs()

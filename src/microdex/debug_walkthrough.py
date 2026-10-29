@@ -255,7 +255,12 @@ async def _stage(number: int, text: str, pause: bool) -> None:
 
 
 async def _next_event(thread: MicrodexThread) -> EventMsg:
-    return await asyncio.wait_for(thread.next_event(), timeout=15)
+    event = await asyncio.wait_for(thread.next_event(), timeout=15)
+    if event["kind"] == "tool_approval_requested":
+        # This deterministic walkthrough intentionally acts as the approving
+        # client so it can demonstrate mutating tools without an interactive UI.
+        await thread.approve_tool(event["tool_call_id"], True)
+    return event
 
 
 async def _consume_until(thread: MicrodexThread, predicate) -> EventMsg:
@@ -274,6 +279,9 @@ def _show_event(event: EventMsg) -> None:
         detail = (
             f"{event['tool_name']} call_id={event['tool_call_id']} ok={event['ok']}"
         )
+    elif kind == "tool_approval_requested":
+        arguments = event.get("tool_arguments", {})
+        detail = f"{event['tool_name']} call_id={event['tool_call_id']} args={arguments}"
     elif kind == "input_queued":
         detail = f"submission={event['submission_id']}"
     elif kind in {"turn_started", "turn_completed", "turn_aborted"}:

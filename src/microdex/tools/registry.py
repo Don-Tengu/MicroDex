@@ -59,6 +59,7 @@ _HANDLERS = {
 # Only side-effect-free tools may share a worker batch. Mutating tools are
 # barriers because model call order may encode a dependency.
 _PARALLEL_SAFE = frozenset({"read_file", "rg"})
+_REQUIRES_APPROVAL = frozenset({"apply_patch", "exec_command"})
 
 
 def tool_specs() -> list[dict]:
@@ -83,6 +84,10 @@ def tool_names() -> list[str]:
 
 def is_parallel_safe(name: str) -> bool:
     return name in _PARALLEL_SAFE
+
+
+def requires_approval(name: str) -> bool:
+    return name in _REQUIRES_APPROVAL
 
 
 def execute_tool(call: ToolCallState, cwd: str) -> ToolResult:

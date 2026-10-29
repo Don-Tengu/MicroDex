@@ -8,6 +8,7 @@ from typing import Any
 from langgraph.graph.state import CompiledStateGraph
 
 from microdex.runtime.input_queue import InputQueue
+from microdex.runtime.approval import ApprovalBroker
 from microdex.runtime.protocol import EventMsg
 from microdex.runtime.session_io import SessionIo
 
@@ -20,6 +21,7 @@ class Session:
     graph: CompiledStateGraph
     io: SessionIo
     input_queue: InputQueue
+    approval_broker: ApprovalBroker
     recursion_limit: int
     active_task: asyncio.Task[None] | None = field(default=None, init=False)
     active_submission_ids: list[str] = field(default_factory=list, init=False)
