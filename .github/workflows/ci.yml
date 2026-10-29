@@ -23,5 +23,26 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -e ".[dev]"
+      - name: Install ripgrep
+        shell: bash
+        run: |
+          if command -v rg >/dev/null 2>&1; then
+            rg --version
+            exit 0
+          fi
+          case "$(uname -s)" in
+            Linux)
+              sudo apt-get update
+              sudo apt-get install -y ripgrep
+              ;;
+            Darwin)
+              brew install ripgrep
+              ;;
+            *)
+              echo "ripgrep is required on $(uname -s)" >&2
+              exit 1
+              ;;
+          esac
+          rg --version
       - run: python -m pytest -q
       - run: python -m build
