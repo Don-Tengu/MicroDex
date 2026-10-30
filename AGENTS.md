@@ -5,7 +5,7 @@ Python and LangGraph. It is not an empty classroom scaffold. Implement the
 behavior required by the current slice; do not leave core policy behind
 NotImplementedError for the user to fill in.
 
-The read-only reference repository is /Users/bartolomeoquaranto/Code/codex.
+The read-only reference repository is ~/Code/codex.
 Read it to understand behavior, then write an independent Python
 implementation here. Do not modify the reference repository.
 
